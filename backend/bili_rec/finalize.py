@@ -15,10 +15,13 @@ from .util import ensure_dir, fmt_size, read_json, write_json
 _FFMPEG_ENV = 'BILI_FFMPEG'
 _FFPROBE_ENV = 'BILI_FFPROBE'
 
-_WIN_HINTS = [
-    # 新版 ffmpeg（支持 HEVC-in-FLV，4K 录制必需）；旧的 7.0.1 放最后兜底
+_HINTS = [
+    # 新版 ffmpeg（支持 HEVC-in-FLV，4K 录制必需）；旧的 7.0.x 放最后兜底
     r'<新版 ffmpeg 目录>\ffmpeg.exe',
     r'D:\Shotcut\ffmpeg.exe',
+    '/opt/homebrew/bin/ffmpeg',        # macOS Apple Silicon (Homebrew)
+    '/usr/local/bin/ffmpeg',           # macOS Intel (Homebrew) / 手动安装
+    '/usr/bin/ffmpeg',                 # Linux 发行版
     r'C:\ffmpeg\bin\ffmpeg.exe',
     r'C:\Program Files\ffmpeg\bin\ffmpeg.exe',
 ]
@@ -35,7 +38,7 @@ def find_ffmpeg(explicit=''):
     hit = _which('ffmpeg')
     if hit:
         return hit
-    for cand in _WIN_HINTS:
+    for cand in _HINTS:
         if os.path.exists(cand):
             return cand
     return ''
@@ -53,7 +56,7 @@ def find_ffprobe(explicit='', ffmpeg=''):
                              'ffprobe.exe' if os.name == 'nt' else 'ffprobe')
         if os.path.exists(guess):
             return guess
-    for cand in _WIN_HINTS:
+    for cand in _HINTS:
         p = cand.replace('ffmpeg.exe', 'ffprobe.exe')
         if os.path.exists(p):
             return p
