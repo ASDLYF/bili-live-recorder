@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+*.log
+*.jsonl
+_bili_live_work/
+_tools/
+dist/
+*.zip
+bili_cookie.txt
+quark_cookie.txt
+node_modules/
