@@ -1,0 +1,272 @@
+# -*- coding: utf-8 -*-
+"""录制后处理：FLV → MP4（无损 remux）、抽帧做封面、导出弹幕、生成投稿队列。
+
+ffmpeg 只处理本地文件，不联网（本机命令行建不了 HTTPS）。
+"""
+import json
+import os
+import shutil
+import subprocess
+import time
+
+from . import danmaku as dm
+from .util import ensure_dir, fmt_size, read_json, write_json
+
+_FFMPEG_ENV = 'BILI_FFMPEG'
+_FFPROBE_ENV = 'BILI_FFPROBE'
+
+_WIN_HINTS = [
+    # 新版 ffmpeg（支持 HEVC-in-FLV，4K 录制必需）；旧的 7.0.1 放最后兜底
+    r'<新版 ffmpeg 目录>\ffmpeg.exe',
+    r'D:\Shotcut\ffmpeg.exe',
+    r'C:\ffmpeg\bin\ffmpeg.exe',
+    r'C:\Program Files\ffmpeg\bin\ffmpeg.exe',
+]
+
+
+def _which(name):
+    return shutil.which(name)
+
+
+def find_ffmpeg(explicit=''):
+    for cand in (explicit, os.environ.get(_FFMPEG_ENV)):
+        if cand and os.path.exists(cand):
+            return cand
+    hit = _which('ffmpeg')
+    if hit:
+        return hit
+    for cand in _WIN_HINTS:
+        if os.path.exists(cand):
+            return cand
+    return ''
+
+
+def find_ffprobe(explicit='', ffmpeg=''):
+    for cand in (explicit, os.environ.get(_FFPROBE_ENV)):
+        if cand and os.path.exists(cand):
+            return cand
+    hit = _which('ffprobe')
+    if hit:
+        return hit
+    if ffmpeg:
+        guess = os.path.join(os.path.dirname(ffmpeg),
+                             'ffprobe.exe' if os.name == 'nt' else 'ffprobe')
+        if os.path.exists(guess):
+            return guess
+    for cand in _WIN_HINTS:
+        p = cand.replace('ffmpeg.exe', 'ffprobe.exe')
+        if os.path.exists(p):
+            return p
+    return ''
+
+
+def run(cmd, timeout=3600, log=None):
+    if log:
+        log('执行：%s', ' '.join('"%s"' % c if ' ' in str(c) else str(c) for c in cmd[:8]))
+    p = subprocess.run(cmd, capture_output=True, timeout=timeout, text=True,
+                       encoding='utf-8', errors='replace')
+    if p.returncode != 0 and log:
+        log('命令失败(%s)：%s', p.returncode, (p.stderr or '')[-1500:])
+    return p
+
+
+def probe(ffprobe, path):
+    if not ffprobe:
+        return {}
+    p = run([ffprobe, '-v', 'error', '-show_entries',
+             'stream=codec_type,codec_name,width,height,avg_frame_rate,bit_rate',
+             '-show_entries', 'format=duration,size,bit_rate', '-of', 'json', path], timeout=120)
+    try:
+        data = json.loads(p.stdout or '{}')
+    except Exception:
+        return {}
+    streams = data.get('streams') or []
+    out = {'duration': float((data.get('format') or {}).get('duration') or 0),
+           'size': int((data.get('format') or {}).get('size') or 0)}
+    for s in streams:
+        if s.get('codec_type') == 'video' and not out.get('width'):
+            out['width'] = int(s.get('width') or 0)
+            out['height'] = int(s.get('height') or 0)
+            out['vcodec'] = s.get('codec_name') or ''
+            fr = s.get('avg_frame_rate') or '0/1'
+            try:
+                num, den = fr.split('/')
+                out['fps'] = round(float(num) / float(den or 1), 2)
+            except Exception:
+                out['fps'] = 0
+        elif s.get('codec_type') == 'audio' and not out.get('acodec'):
+            out['acodec'] = s.get('codec_name') or ''
+    return out
+
+
+def remux(ffmpeg, src, dst, log=None):
+    """无损转封装：-c copy。FLV 里的 h264/aac 原样搬进 mp4。"""
+    tmp = dst + '.part.mp4'
+    p = run([ffmpeg, '-y', '-hide_banner', '-loglevel', 'error',
+             '-i', src, '-map', '0:v:0', '-map', '0:a:0?', '-c', 'copy',
+             '-movflags', '+faststart', '-f', 'mp4', tmp], timeout=6 * 3600, log=log)
+    if p.returncode != 0 or not os.path.exists(tmp) or os.path.getsize(tmp) < 1024:
+        # 有些流的首帧没有关键帧，重试时补一个空包解码时间基准
+        p = run([ffmpeg, '-y', '-hide_banner', '-loglevel', 'error',
+                 '-fflags', '+genpts', '-i', src, '-map', '0:v:0', '-map', '0:a:0?',
+                 '-c', 'copy', '-movflags', '+faststart', '-f', 'mp4', tmp],
+                timeout=6 * 3600, log=log)
+    if p.returncode != 0 or not os.path.exists(tmp):
+        raise RuntimeError('转 mp4 失败：%s' % ((p.stderr or '')[-600:] or '未知错误'))
+    os.replace(tmp, dst)
+    return dst
+
+
+def extract_cover(ffmpeg, video, dst, at_sec=20, log=None):
+    """抽一帧做封面：优先取第 20 秒（避开开场黑屏），太短就取 1 秒。"""
+    for at in (at_sec, 1.0, 0.0):
+        p = run([ffmpeg, '-y', '-hide_banner', '-loglevel', 'error', '-ss', '%.2f' % at,
+                 '-i', video, '-frames:v', '1', '-vf', 'scale=1146:-2',
+                 '-q:v', '3', dst], timeout=180, log=None)
+        if p.returncode == 0 and os.path.exists(dst) and os.path.getsize(dst) > 2048:
+            return dst
+    if log:
+        log('抽封面失败，投稿时将由 B 站自动生成封面')
+    return ''
+
+
+def render_template(tpl, ctx):
+    out = str(tpl or '')
+    for k, v in (ctx or {}).items():
+        out = out.replace('{%s}' % k, str(v))
+    return out
+
+
+def finalize_session(store, session, settings, log, ffmpeg='', ffprobe=''):
+    """把一次直播会话的处理完：所有分P 转 mp4、导出弹幕、做封面、进投稿队列。"""
+    ffmpeg = find_ffmpeg(ffmpeg)
+    ffprobe = find_ffprobe(ffprobe, ffmpeg)
+    data = session.data
+    done = list(data.get('finalized') or [])
+    parts = [p for p in session.parts() if p.get('status') == 'closed']
+    if not parts:
+        session.update({'status': 'empty', 'finalizedAt': time.time()})
+        return {'ok': True, 'items': [], 'note': '没有录到内容'}
+
+    # 弹幕导出
+    jsonl = os.path.join(session.dir, 'danmaku.jsonl')
+    xml = os.path.join(session.dir, 'danmaku.xml')
+    ass = os.path.join(session.dir, 'danmaku.ass')
+    dan_count = 0
+    if os.path.exists(jsonl):
+        try:
+            dan_count = dm.export_xml(jsonl, xml)
+            first = probe(ffprobe, parts[0].get('file') or '')
+            w = int(first.get('width') or 1920) or 1920
+            h = int(first.get('height') or 1080) or 1080
+            dm.export_ass(jsonl, ass, width=w, height=h)
+            log('弹幕导出：%d 条 → xml/ass', dan_count)
+        except Exception as e:
+            log('弹幕导出失败：%s', e)
+
+    date = time.strftime('%Y-%m-%d', time.localtime(data.get('recStart') or time.time()))
+    uname = data.get('uname') or ('UP%s' % data.get('mid'))
+    live_title = (data.get('title') or '').strip() or '直播'
+    room_url = 'https://live.bilibili.com/%s' % data.get('roomId')
+    multi = len(parts) > 1
+    items = []
+
+    for part in parts:
+        src = part.get('file') or ''
+        if not src or not os.path.exists(src):
+            continue
+        dst = os.path.join(session.dir, 'part-%03d.mp4' % int(part['index']))
+        info = {}
+        if os.path.exists(dst) and os.path.getsize(dst) > 1024:
+            info = probe(ffprobe, dst)
+        else:
+            log('转封装 分P%d：%s', part['index'], fmt_size(os.path.getsize(src)))
+            try:
+                remux(ffmpeg, src, dst, log=log)
+                info = probe(ffprobe, dst)
+            except Exception as e:
+                log('分P%d 转封装失败：%s', part['index'], e)
+                continue
+        duration = float(info.get('duration') or (part.get('durationMs') or 0) / 1000.0)
+        if duration < 5:
+            # 太短的分段不投稿，但也不能把 mp4 留在盘上变成「隐形占用」：
+            # 这种文件既不在队列里、用户也没法从面板删，只能悄悄吃磁盘。
+            log('分P%d 只有 %.1f 秒，跳过投稿并删除这个文件', part['index'], duration)
+            for junk in (dst, src):
+                try:
+                    if junk and os.path.exists(junk):
+                        os.remove(junk)
+                        log('  已删除 %s', os.path.basename(junk))
+                except Exception:
+                    pass
+            session.update_part(part['index'], {'status': 'skipped',
+                                                'skipReason': 'too_short'})
+            continue
+
+        ctx = {'date': date, 'uname': uname, 'title': live_title, 'roomUrl': room_url,
+               'duration': time.strftime('%H:%M:%S', time.gmtime(duration)),
+               'part': 'P%d' % part['index'] if multi else '',
+               'time': time.strftime('%H:%M', time.localtime(data.get('recStart') or time.time()))}
+        title = render_template(settings.get('titleTemplate'), ctx).strip()
+        if multi:
+            title = '%s P%d' % (title, part['index'])
+        desc = render_template(settings.get('descTemplate'), ctx).strip()
+        tags = [render_template(t, ctx) for t in (settings.get('tags') or []) if t]
+        cover = os.path.join(session.dir, 'cover.jpg')
+        if settings.get('makeCover') and not (os.path.exists(cover) and os.path.getsize(cover) > 2048):
+            extract_cover(ffmpeg, dst, cover, log=log)
+        if not (os.path.exists(cover) and os.path.getsize(cover) > 2048):
+            cover = ''
+
+        item = {
+            'sessionId': session.id,
+            'mid': data.get('mid'),
+            'uname': uname,
+            'partIndex': int(part['index']),
+            'file': dst,
+            'bytes': os.path.getsize(dst),
+            'durationSec': round(duration, 1),
+            'width': info.get('width'), 'height': info.get('height'),
+            'title': title[:80],
+            'desc': desc[:1900],
+            'tag': ','.join([t[:20] for t in tags])[:200],
+            'tid': int(settings.get('tid') or 21),
+            'cover': cover,
+            'visibility': settings.get('visibility') or 'private',
+            'dtime': int(settings.get('dtime') or 0),
+            'copyright': int(settings.get('copyright') or 1),
+            'source': settings.get('source') or '',
+            'noReprint': int(settings.get('noReprint') or 0),
+            'openElec': int(settings.get('openElec') or 0),
+            'closeDanmaku': int(settings.get('closeDanmaku') or 0),
+            'closeReply': int(settings.get('closeReply') or 0),
+            'dynamic': settings.get('dynamic') or '',
+            'sessionTitle': live_title,
+            'recordedAt': data.get('recStart') or time.time(),
+        }
+        items.append(item)
+        done.append(part['index'])
+
+        if not settings.get('keepRawFlv'):
+            try:
+                os.remove(src)
+                log('已删除原始 FLV：%s', os.path.basename(src))
+            except Exception:
+                pass
+
+    if items:
+        added = store.queue_add(items)
+        log('已加入待发布队列：%d 条', len(added))
+    else:
+        added = []
+    session.update({'status': 'done', 'finalizedAt': time.time(),
+                    'finalized': sorted(set(done)), 'danmaku': dan_count,
+                    'cover': items[0]['cover'] if items else ''})
+    if settings.get('keepRawFlv') is False:
+        raw = os.path.join(session.dir, 'raw')
+        try:
+            if os.path.isdir(raw) and not os.listdir(raw):
+                os.rmdir(raw)
+        except Exception:
+            pass
+    return {'ok': True, 'items': added, 'danmaku': dan_count}
