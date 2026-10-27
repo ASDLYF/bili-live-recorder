@@ -42,6 +42,37 @@
 8. **B 站合集写入接口不可用**（`season/section/add|edit`、`season/edit` 全返回 `-400`），只能投稿后手动加入
 9. **Windows 上不能用 `os.kill(pid, 0)` 探活**（会走 `TerminateProcess`，等于查询即杀进程）
 
+
+## 平台支持
+
+| 平台 | 状态 | 说明 |
+|---|---|---|
+| Windows | ✅ 实测通过 | 本项目的开发与验证环境（Windows 11 / Python 3.14 / ffmpeg 2026-master） |
+| macOS | ✅ 代码兼容 | Python 后端只用标准库；ffmpeg 走 `/opt/homebrew/bin`、`/usr/local/bin` 自动发现 |
+| Linux | ✅ 代码兼容 | 同上（`shutil.which` + `/usr/bin`） |
+
+需要一个 **支持 HEVC-in-FLV 的 ffmpeg（7.1+）**，4K 录制才转得出 mp4：
+
+```bash
+# macOS
+brew install ffmpeg
+# 若 Homebrew 版本偏旧，可从 https://evermeet.cx/ffmpeg/ 或 BtbN/FFmpeg-Builds 取新版
+
+# Linux (Debian/Ubuntu)
+sudo apt install ffmpeg      # 需要 >= 7.1，否则装静态包
+```
+
+## 依赖
+
+| 依赖 | 是否随仓库提供 | 说明 |
+|---|---|---|
+| Python 3.8+ | 否（系统自带） | **只用标准库**，无需 pip install |
+| Node.js / React | 否 | 由 DSH 宿主提供，插件不额外依赖 npm 包 |
+| ffmpeg / ffprobe | 否（体积 300MB+，不入库） | 仅用于本地转封装 / 抽帧；需 7.1+ |
+| B 站 cookie | 否（自己填） | 面板里粘贴，写入后端目录的 `bili_cookie.txt`，不会进仓库 |
+
+自检脚本：`python -m bili_rec.cli --workdir <工作目录> status` 会打印 Python/ffmpeg/守护进程状态。
+
 ## 许可
 
 MIT
