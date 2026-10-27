@@ -1,0 +1,14 @@
+﻿- insert:
+    - id: bili-live
+      name: 'bili-live'
+      config:
+        scriptDir: '<你的后端目录>'
+        workRoot: ''
+        pythonPath: ''
+        ffmpegPath: '<新版 ffmpeg 目录>\ffmpeg.exe'
+        ffprobePath: '<新版 ffmpeg 目录>\ffprobe.exe'
+        cookieFile: ''
+        autoStartDaemon: true
+        startGraceMs: 2500
+        backendTimeoutMs: 180000
+        maxLogTail: 12000
