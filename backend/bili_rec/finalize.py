@@ -194,7 +194,9 @@ def finalize_session(store, session, settings, log, ffmpeg='', ffprobe=''):
     date = time.strftime('%Y-%m-%d', time.localtime(data.get('recStart') or time.time()))
     uname = data.get('uname') or ('UP%s' % data.get('mid'))
     live_title = (data.get('title') or '').strip() or '直播'
-    room_url = 'https://live.bilibili.com/%s' % data.get('roomId')
+    _plat = data.get('platform') or 'bili'
+    room_url = ('https://www.huya.com/%s' % data.get('roomId')) if _plat == 'huya' \
+        else ('https://live.bilibili.com/%s' % data.get('roomId'))
     multi = len(parts) > 1
     items = []
 

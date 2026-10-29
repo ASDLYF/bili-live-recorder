@@ -12,7 +12,7 @@ import sys
 import time
 
 from . import finalize as fin
-from . import live, publish as pub, upload as up
+from . import live, platforms, publish as pub, upload as up
 from . import __version__
 from .store import Store, DEFAULT_SETTINGS
 from .util import Log, fmt_size, iso, now, read_json, write_json, tail, pid_alive
@@ -205,23 +205,20 @@ def cmd_ups(args, out):
         out.set(ups=store.ups().get('items') or [])
         return
     if args.action == 'add':
-        mid = str(args.mid).strip()
-        if not mid.isdigit():
-            out.fail('mid 必须是数字 UID')
+        raw = str(args.mid or '').strip()
+        if not raw:
+            out.fail('要给 UID / 房间号 / 直播间链接')
             return
-        info = live.room_of_mid(mid, cookie=cookie)
-        if not info:
-            out.fail('拿不到该 UID 的直播间（可能没开通过直播）')
-            return
-        uname = ''
+        # 纯数字沿用老语义=B站 UID；虎牙写 huya:919191 或直接贴 www.huya.com/xxx
+        target = raw if not raw.isdigit() else ('bili:' + raw)
+        if args.platform:
+            target = '%s:%s' % (args.platform, raw)
         try:
-            uname = live.master_info(mid, cookie=cookie).get('uname') or ''
-        except Exception:
-            pass
-        up_rec = {'mid': mid, 'uname': uname or ('UP%s' % mid),
-                  'roomId': info['roomId'], 'enabled': True,
-                  'live': info['live'], 'title': info.get('title') or '',
-                  'cover': info.get('cover') or '', 'addedAt': now()}
+            rec = platforms.resolve(target, cookie=cookie)
+        except Exception as e:
+            out.fail(str(e))
+            return
+        up_rec = {**rec, 'enabled': True, 'addedAt': now()}
         store.upsert_up(up_rec)
         out.set(up=up_rec)
         return
@@ -461,26 +458,37 @@ def cmd_publish_options(args, out):
 
 
 def cmd_probe(args, out):
-    """探测一次取流（不录制），用于验证 cookie/清晰度。"""
+    """探测一次取流（不录制），用于验证 cookie/清晰度。支持 B站 与 虎牙。"""
     store, cookie, _ = make_ctx(args)
+    plat = (getattr(args, 'platform', '') or platforms.BILI).strip() or platforms.BILI
     try:
-        info = live.room_info(args.room, cookie=cookie) if args.room else live.room_of_mid(args.mid, cookie=cookie)
+        if plat == platforms.HUYA:
+            room = int(args.room or args.mid or 0)
+            if not room:
+                out.fail('虎牙要 --room 房间号')
+                return
+        elif args.room:
+            room = int(args.room)
+        else:
+            it = live.room_of_mid(str(args.mid), cookie=cookie)
+            if not it:
+                out.fail('没有这个直播间')
+                return
+            room = int(it['roomId'])
+        info = platforms.room_info(plat, room, cookie=cookie)
     except Exception as e:
         out.fail(str(e))
         return
-    if not info:
-        out.fail('没有这个直播间')
-        return
-    out.set(room=info)
+    out.set(room=info, platform=plat, label=platforms.label(plat))
     if not info.get('live'):
-        out.set(streams=[], note='当前未开播')
+        out.set(stream=None, note='当前未开播')
         return
     try:
-        streams = live.playurl(info['roomId'], qn=args.qn, cookie=cookie)
+        best = platforms.stream(plat, room, qn=int(args.qn or 0), cookie=cookie)
     except Exception as e:
         out.fail(str(e))
         return
-    out.set(streams=[{k: v for k, v in s.items() if k != 'url'} for s in streams])
+    out.set(stream={k: v for k, v in best.items() if k != 'url'})
 
 
 def cmd_upload_test(args, out):
@@ -496,7 +504,7 @@ def cmd_upload_test(args, out):
     out.set(upload=res)
     if args.submit:
         meta = {
-            'title': args.title or 'DSH 录播姬自检',
+            'title': args.title or 'DSH 直播小助手自检',
             'desc': '这是一条自检投稿，稍后会被删除。',
             'tag': '自检',
             'tid': int(args.tid or 21),
@@ -520,7 +528,7 @@ def cmd_upload_test(args, out):
 # ---------------------------------------------------------------- 入口
 
 def build_parser():
-    ap = argparse.ArgumentParser(prog='bili_rec', description='B站录播姬后端')
+    ap = argparse.ArgumentParser(prog='bili_rec', description='直播小助手后端')
     ap.add_argument('--workdir', default=os.environ.get('BILI_REC_WORK')
                     or os.path.join(BACKEND_DIR, '_bili_live_work'))
     ap.add_argument('--cookie-file', default=os.environ.get('BILI_REC_COOKIE') or '')
@@ -543,6 +551,7 @@ def build_parser():
     p = new('ups')
     p.add_argument('action', choices=['list', 'add', 'remove', 'toggle'])
     p.add_argument('--mid', default='')
+    p.add_argument('--platform', default='', help='bili / huya，留空按输入自动判断')
     p.add_argument('--enabled', type=int, default=1)
 
     p = new('record')
@@ -575,7 +584,8 @@ def build_parser():
 
     p = new('probe')
     p.add_argument('--mid', default=''); p.add_argument('--room', type=int, default=0)
-    p.add_argument('--qn', type=int, default=10000)
+    p.add_argument('--qn', type=int, default=0)
+    p.add_argument('--platform', default='', help='bili / huya')
 
     p = new('upload-test')
     p.add_argument('--file', required=True)

@@ -1,5 +1,5 @@
 /**
- * B站录播姬（Host 侧）
+ * 直播小助手（Host 侧）
  *
  * 设计：插件只负责「拉起与控制」，真正干活的在 Python 后端（bili_rec 包）：
  *   轮询开播 → 抓FLV(自改时间戳/按关键帧切分P) → 转 mp4 + 封面 + 弹幕 → 投稿队列
@@ -428,13 +428,13 @@ export function apply(ctx, config = {}) {
   define({
     name: 'bili_live_status',
     description:
-      'B站录播姬总览：守护进程是否在跑、监控的 UP 主及其开播/录制状态、已录会话、待发布队列统计、磁盘剩余。',
+      '直播小助手总览：守护进程是否在跑、监控的 UP 主及其开播/录制状态、已录会话、待发布队列统计、磁盘剩余。',
     parameters: { type: 'object', properties: {}, additionalProperties: false },
     output: genericOutput((_a, v) => {
       if (!v || v.ok === false) return block(`读取状态失败：${(v && v.error) || '未知错误'}`);
       const d = v.daemon || {};
       const lines = [
-        `录播姬：守护进程${d.alive ? `运行中（PID ${d.pid}，已运行 ${fmtDur(d.uptimeSec)}）` : '未运行（不会自动录制）'}`,
+        `直播小助手：守护进程${d.alive ? `运行中（PID ${d.pid}，已运行 ${fmtDur(d.uptimeSec)}）` : '未运行（不会自动录制）'}`,
         `  工作目录：${v.workRoot || '(未配置)'}　磁盘剩余：${v.disk && v.disk.freeGb != null ? `${v.disk.freeGb}GB` : '未知'}`,
         `  凭据：${v.cookie && v.cookie.present ? '已保存' : '未设置（录制与投稿都要 B 站 cookie）'}`,
         `  UP 主 ${(v.ups || []).length} 个：`,
@@ -661,7 +661,7 @@ export function apply(ctx, config = {}) {
   define({
     name: 'bili_live_settings',
     description:
-      '读写录播姬设置（不传 patch 就是读）。可改：partSeconds 分P时长秒、maxQn 清晰度、preferCodec、pollSeconds、titleTemplate、descTemplate、tid 分区、tags、visibility（private 仅自己可见/public/scheduled）、autoPublish、deleteLocalAfterPublish 等。',
+      '读写直播小助手设置（不传 patch 就是读）。可改：partSeconds 分P时长秒、maxQn 清晰度、preferCodec、pollSeconds、titleTemplate、descTemplate、tid 分区、tags、visibility（private 仅自己可见/public/scheduled）、autoPublish、deleteLocalAfterPublish 等。',
     parameters: {
       type: 'object',
       properties: {

@@ -1,4 +1,4 @@
-# B站录播姬（DSH 插件）
+# 直播小助手（DSH 插件）
 
 自动盯某位 UP 主的直播：**开播就录 → 下播收尾 → 进待发布队列 → 你确认后按 B 站投稿选项发到自己账号**。
 录播全程脱离 DSH 生命周期（守护进程独立运行，DSH 关了照样在录）。
@@ -19,7 +19,7 @@ ffmpeg 只处理本地文件，不联网。
 
 1. 面板/工具安装：把 `<工作区>\bili-live-plugin` 作为 bundle 安装（`plugin_manager install_bundle`）。
 2. 首次安装后**重启 DSH Desktop**（Cordis 用固定 URL import 插件模块，ESM 缓存不会热加载）。
-3. 打开左侧导航「B站录播姬」，先「保存凭据」（整行 cookie，必须含 `SESSDATA` 与 `bili_jct`），再「添加 UP 主」（填 UID 即可，插件自己解析直播间）。
+3. 打开左侧导航「直播小助手」，先「保存凭据」（整行 cookie，必须含 `SESSDATA` 与 `bili_jct`），再「添加 UP 主」（填 UID 即可，插件自己解析直播间）。
 
 ## 面板
 

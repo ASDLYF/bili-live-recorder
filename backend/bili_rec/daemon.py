@@ -15,7 +15,7 @@ import time
 from . import capture as cap
 from . import danmaku as dm
 from . import finalize as fin
-from . import live, publish
+from . import live, platforms, publish
 from . import __version__
 from .store import Store
 from .util import fmt_size, iso, now, read_json, write_json, Log, pid_alive as _pid_alive
@@ -181,35 +181,34 @@ class Daemon:
             mid = str(up.get('mid') or '')
             if not mid:
                 continue
+            plat = up.get('platform') or platforms.BILI
             ctx = self.recorders.get(mid)
-            room_id = up.get('roomId') or 0
+            room_id = int(up.get('roomId') or 0)
             info = None
             try:
+                # B站老数据可能只有 UID 没有房间号，先补一次
+                if not room_id and plat == platforms.BILI:
+                    it = live.room_of_mid(mid, cookie=self.cookie)
+                    if it:
+                        self.store.upsert_up({**up, 'roomId': it['roomId']})
+                        room_id = int(it['roomId'])
                 if room_id:
-                    info = live.room_info(room_id, cookie=self.cookie)
-                else:
-                    info = live.room_of_mid(mid, cookie=self.cookie)
-                    if info:
-                        self.store.upsert_up({**up, 'roomId': info['roomId'],
-                                              'uname': up.get('uname') or '',
-                                              'title': info.get('title') or up.get('title') or ''})
-                        room_id = info['roomId']
+                    info = platforms.room_info(plat, room_id, cookie=self.cookie)
             except Exception as e:
-                self.log('轮询 %s 失败：%s', mid, e)
+                self.log('轮询 %s(%s) 失败：%s', mid, platforms.label(plat), e)
                 continue
             if not info:
                 continue
             up_state = {
-                'mid': mid, 'roomId': room_id, 'live': bool(info.get('live')),
+                'mid': mid, 'platform': plat, 'roomId': room_id, 'live': bool(info.get('live')),
                 'title': info.get('title') or '', 'cover': info.get('cover') or '',
                 'online': info.get('online') or 0,
                 'checkedAt': now(),
             }
-            if not up.get('uname') or str(up.get('uname')).startswith('UP'):
-                mi = live.master_info(mid, cookie=self.cookie)
-                if mi.get('uname'):
-                    up_state['uname'] = mi['uname']
-                    up_state['face'] = mi.get('face') or ''
+            if info.get('uname'):
+                up_state['uname'] = info['uname']
+            if info.get('face'):
+                up_state['face'] = info['face']
             self.store.upsert_up({**up, **up_state})
             if info.get('live'):
                 self._offline_hits.pop(mid, None)
@@ -245,25 +244,27 @@ class Daemon:
 
     def _start_recording(self, up, settings, manual=False):
         mid = str(up.get('mid') or '')
+        plat = up.get('platform') or platforms.BILI
         room_id = int(up.get('roomId') or 0)
-        if not room_id:
+        if not room_id and plat == platforms.BILI:
             try:
                 info = live.room_of_mid(mid, cookie=self.cookie)
                 room_id = int((info or {}).get('roomId') or 0)
             except Exception as e:
                 self.log('拿不到直播间：%s', e)
         if not room_id:
-            self.event('error', 'UP %s 没有可用的直播间号' % mid)
+            self.event('error', 'UP %s(%s) 没有可用的直播间号' % (mid, platforms.label(plat)))
             return None
         if mid in self.recorders:
             return self.recorders[mid]
         info = {}
         try:
-            info = live.room_info(room_id, cookie=self.cookie)
+            info = platforms.room_info(plat, room_id, cookie=self.cookie)
         except Exception:
             info = up or {}
         sess = self.store.new_session(mid, {
             'mid': mid,
+            'platform': plat,
             'uname': up.get('uname') or info.get('uname') or ('UP%s' % mid),
             'roomId': room_id,
             'title': info.get('title') or up.get('title') or '',
@@ -279,9 +280,10 @@ class Daemon:
         if up.get('preferCodec'):
             s['preferCodec'] = up.get('preferCodec')
         dan = None
-        if self.store.settings.get('danmaku'):
+        # 弹幕抓取目前只有 B站 实现（虎牙是 tars 私有协议，暂不接）
+        if plat == platforms.BILI and self.store.settings.get('danmaku'):
             dan = dm.DanmakuRecorder(sess, room_id, self.cookie, Log(sess.log_path()), t0=sess.data['recStart'])
-        recorder = cap.Capture(sess, s, Log(sess.log_path()), danmaku=dan)
+        recorder = cap.Capture(sess, s, Log(sess.log_path()), danmaku=dan, platform=plat)
         thread = threading.Thread(target=self._record_worker, args=(mid, sess, recorder),
                                   name='rec-%s' % mid, daemon=True)
         self.recorders[mid] = {'session': sess, 'capture': recorder, 'thread': thread,
@@ -530,7 +532,7 @@ class Daemon:
 
 def main(argv=None):
     import argparse
-    ap = argparse.ArgumentParser(description='B站录播姬守护进程')
+    ap = argparse.ArgumentParser(description='直播小助手守护进程')
     ap.add_argument('--workdir', required=True)
     ap.add_argument('--cookie-file', default='')
     ap.add_argument('--log', default='')

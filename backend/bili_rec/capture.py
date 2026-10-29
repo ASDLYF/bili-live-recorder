@@ -13,7 +13,7 @@ import struct
 import threading
 import time
 
-from . import httpc, live
+from . import httpc, live, platforms
 from .util import ensure_dir, fmt_size
 
 FLV_HEADER = b'FLV\x01\x05\x00\x00\x00\x09\x00\x00\x00\x00'
@@ -118,12 +118,13 @@ def _read_exact(stream, n):
 class Capture:
     """一次直播的抓流器（跨断流重连）。对外只读 snapshot()。"""
 
-    def __init__(self, session, settings, log, stop_event=None, danmaku=None):
+    def __init__(self, session, settings, log, stop_event=None, danmaku=None, platform='bili'):
         self.session = session
         self.settings = settings
         self.log = log
         self.stop_event = stop_event or threading.Event()
         self.danmaku = danmaku
+        self.platform = platform or 'bili'
         self.room_id = session.room_id
         self.cookie = settings.get('_cookie') or ''
         # maxQn = 0 表示「自动取该主播当前最高画质」（注意 0 是合法值，不能写 or 10000）
@@ -155,6 +156,31 @@ class Capture:
         self._part_started = time.time()
         self._part_closed = False
         self._seq = {}          # 关键的编解码头：video AVC/HEVC sequence header + AAC header
+        # 虎牙的 FLV 是分块响应（单连接只给 1~2MB），必须高频重连；
+        # 但每个 wsSecret 链接有效期有好几分钟，缓存住避免每次重连都打一次取流接口。
+        self._stream_cache = None
+        self._stream_cache_at = 0.0
+        self._raw_last = {}     # 虎牙去重用：每个轨最近写过的绝对时间戳（ms）
+
+    # ------------------------------------------------------------ 取流缓存
+
+    # 缓存多久：B站 playurl 的地址分钟级就可能失效，不缓存；虎牙的 wsSecret 几十分钟有效
+    # 虎牙的 FLV 每次连接只回 1~2MB 的快照，必须重新取流（新 wsSecret）才能拿到更新的位置，
+    # 所以这里不缓存；B站 playurl 地址本身就是长连接，也不需要缓存。
+    _CACHE_TTL = {}
+
+    def _cached_stream(self):
+        ttl = self._CACHE_TTL.get(self.platform, 0)
+        if not ttl or not self._stream_cache:
+            return None
+        if time.time() - self._stream_cache_at > ttl:
+            return None
+        return self._stream_cache
+
+    def _cache_stream(self, best):
+        if self.platform in self._CACHE_TTL:
+            self._stream_cache = best
+            self._stream_cache_at = time.time()
 
     # ------------------------------------------------------------ 对外
 
@@ -213,7 +239,7 @@ class Capture:
                     self.status['reconnects'] = int(self.status.get('reconnects') or 0) + 1
                 else:
                     fails = 0
-                    backoff = 2.0
+                    backoff = 0.15 if self.platform == platforms.HUYA else 2.0
                 finally:
                     self._close_part_handle()
 
@@ -226,8 +252,9 @@ class Capture:
                 wait = min(20.0, backoff)
                 slept = 0.0
                 while slept < wait and not self.stopping:
-                    time.sleep(0.5)
-                    slept += 0.5
+                    step = min(0.5, wait - slept)
+                    time.sleep(step)
+                    slept += step
                 backoff *= 1.6
         finally:
             self._close_part(closed=True)
@@ -242,42 +269,37 @@ class Capture:
 
     def _capture_once(self):
         prefer_codec = self.settings.get('preferCodec') or 'avc'
-        if self.qn <= 0:
-            # 自动最高画质：不设上限，按主播当前实际能给的最高档挑
-            streams = live.playurl(self.room_id, qn=20000, cookie=self.cookie, codec='0,1')
-            best = live.pick_stream(streams, 'flv', '')   # 先比 qn（画质），再比协议/编码
-            self.log('自动画质：qn=%s（%s %s）', best['qn'], best['codec'],
-                     live.QN_DESC.get(best['qn'], ''))
+        best = self._cached_stream()
+        try:
+            if best is None:
+                best = platforms.stream(self.platform, self.room_id, qn=self.qn,
+                                        codec=prefer_codec, cookie=self.cookie)
+                self._cache_stream(best)
+        except live.LiveError as e:
+            if 'live_status=0' in str(e):
+                raise NotLive(str(e))
+            raise
+        if self.qn <= 0 and best.get('qn'):
+            self.log('自动画质：qn=%s（%s %s）', best['qn'], best['codec'], best.get('qnDesc') or '')
             self.session.update({'maxQn': best['qn'], 'vcodec': best['codec']})
-        else:
-            try:
-                streams = live.playurl(
-                    self.room_id, qn=self.qn, cookie=self.cookie,
-                    codec='0' if prefer_codec == 'avc' else ('1' if prefer_codec == 'hevc' else '0,1'))
-            except live.LiveError as e:
-                if 'live_status=0' in str(e):
-                    raise NotLive(str(e))
-                # 指定的编码这间房没有（例如选了 hevc 但主播只推 avc）：退回全编码再挑
-                self.log('偏好的 %s 流不可用（%s），改请求全部编码', prefer_codec, e)
-                try:
-                    streams = live.playurl(self.room_id, qn=self.qn, cookie=self.cookie, codec='0,1')
-                except live.LiveError as e2:
-                    if 'live_status=0' in str(e2):
-                        raise NotLive(str(e2))
-                    raise
-            best = live.pick_stream(streams, 'flv', prefer_codec)
         self.status['stream'] = '%s/%s/%s qn=%s' % (
             best['protocol'], best['format'], best['codec'], best['qn'])
         self.status['state'] = 'recording'
         self.status['error'] = ''
         self.log('取流：%s %s（qn=%s %s）', best['protocol'], best['format'],
-                 best['qn'], live.QN_DESC.get(best['qn'], ''))
+                 best['qn'], best.get('qnDesc') or '')
         if best['format'] != 'flv':
             raise RuntimeError('当前只有 %s 流（本机命令行拉不了 https），暂不支持' % best['format'])
 
-        stream = httpc.Stream(best['url'],
-                              headers={'Referer': 'https://live.bilibili.com/'},
-                              cookie=self.cookie, timeout=25)
+        try:
+            stream = httpc.Stream(best['url'],
+                                  headers=best.get('headers') or {'Referer': 'https://live.bilibili.com/'},
+                                  cookie=self.cookie, timeout=25)
+        except Exception:
+            # 链接过期/被 CDN 拒了：丢掉缓存，下一轮重新取流
+            self._stream_cache = None
+            self._stream_cache_at = 0.0
+            raise
         try:
             header = _read_exact(stream, 13)
             if not header or header[:3] != b'FLV':
@@ -324,6 +346,14 @@ class Capture:
                     self._close_part(closed=True)
                     self._open_part(None, resume=False)
 
+                if self.platform == platforms.HUYA and tag_type in (8, 9):
+                    # 虎牙每次重连给的是「当前 GOP 起点的快照」，边缘节点还会重放同一段。
+                    # 用绝对时间戳做闸门：不比上一段尾帧新的 tag 一律丢弃，否则画面会重复卡顿。
+                    raw_ms = (int(ext_ts) << 24) | int(raw_ts)
+                    prev = self._raw_last.get(tag_type)
+                    if prev is not None and raw_ms <= prev:
+                        continue
+                    self._raw_last[tag_type] = raw_ms
                 self._sink.write_tag(tag_type, data_size, raw_ts, ext_ts, stream_id, payload)
                 self._total_bytes += 11 + data_size + 4
                 self._part_last_ts = self._sink.last_ts

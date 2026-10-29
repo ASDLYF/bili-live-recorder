@@ -41,7 +41,7 @@ DEFAULT_SETTINGS = {
     'titleTemplate': '【录播】{date} {uname} {title}',
     'descTemplate': ('{uname} 的直播录播（{date}）。\n'
                      '直播间：{roomUrl}\n'
-                     '本录播由 DSH「B站录播姬」自动录制。'),
+                     '本录播由 DSH「直播小助手」自动录制。'),
     'tid': 21,                     # 分区：21=日常
     'tidName': '日常',
     'tags': ['录播', '{uname}'],

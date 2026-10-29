@@ -1,5 +1,5 @@
 /**
- * B站录播姬（浏览器侧）。
+ * 直播小助手（浏览器侧）。
  *
  * 纯 JavaScript 注册，无 JSX、无构建步骤。数据来自 Host 侧接口
  * `/bili-live/api/data`（只读快照）与 `/bili-live/api/action`（写入动作），
@@ -25,8 +25,8 @@ window.__ModuleLoader__.load({
     // ---------------------------------------------------------------- 文案
 
     const T = {
-      panel: 'B站录播姬',
-      title: 'B站录播姬',
+      panel: '直播小助手',
+      title: '直播小助手',
       intro: '监控 UP 主开播 · 自动分P录制 · 收尾后排队投稿到 B 站',
       loading: '正在读取…',
       refresh: '刷新',
@@ -892,7 +892,7 @@ window.__ModuleLoader__.load({
       const doAdd = async function () {
         const raw = newMid.trim();
         if (!raw) {
-          setAddMsg('请填写 UP 主 UID 或直播间链接');
+          setAddMsg('请填写 UID / 房间号 / 直播间链接');
           return;
         }
         setAddMsg('正在添加…');
@@ -1338,7 +1338,7 @@ window.__ModuleLoader__.load({
           h('span', { style: S.cardTitle }, 'UP 主'),
           h('span', { style: S.tiny }, ups.length + ' 位'),
           h('span', { style: S.spacer }),
-          button(showAdd ? '收起' : '添加 UP 主', function () {
+          button(showAdd ? '收起' : '添加主播', function () {
             setShowAdd(!showAdd);
             setAddMsg('');
           }, S.btnSm),
@@ -1353,7 +1353,7 @@ window.__ModuleLoader__.load({
             h(
               'div',
               { style: { flex: '1 1 260px', minWidth: '200px' } },
-              textInput(newMid, setNewMid, 'UP 主 UID 或直播间链接，例如 3546898589813580', busyDisabled),
+              textInput(newMid, setNewMid, 'B站 UID / 直播间号，或虎牙房间号比如 huya:919191', busyDisabled),
             ),
             button(busy === 'addUp' ? '正在添加…' : '添加', doAdd, {
               className: 'blbtn blbtnPrimary',
@@ -1410,7 +1410,8 @@ window.__ModuleLoader__.load({
           h(
             'div',
             { style: Object.assign({}, S.tiny, { marginTop: '2px' }) },
-            '直播间 ' + (up.roomId != null ? up.roomId : '-') +
+            ((up.platform || 'bili') === 'huya' ? '虎牙' : 'B站') +
+              ' 直播间 ' + (up.roomId != null ? up.roomId : '-') +
               (up.online != null ? ' · 人气 ' + up.online : '') +
               (mid ? ' · UID ' + mid : ''),
           ),

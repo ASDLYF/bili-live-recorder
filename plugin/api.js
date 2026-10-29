@@ -39,7 +39,7 @@ export const DEFAULT_SETTINGS = {
   keepRawFlv: false,
   minFreeGb: 8,
   titleTemplate: '【录播】{date} {uname} {title}',
-  descTemplate: '{uname} 的直播录播（{date}）。\n直播间：{roomUrl}\n本录播由 DSH「B站录播姬」自动录制。',
+  descTemplate: '{uname} 的直播录播（{date}）。\n直播间：{roomUrl}\n本录播由 DSH「直播小助手」自动录制。',
   tid: 21,
   tidName: '日常',
   tags: ['录播', '{uname}'],
@@ -390,7 +390,7 @@ async function doAction(body, paths, deps) {
   const needMid = ['addUp', 'removeUp', 'toggleUp', 'startRec', 'stopRec'];
   const mid = body && body.mid !== undefined ? String(body.mid) : '';
   if (needMid.includes(action) && !mid) {
-    return { ok: false, error: '缺少 mid（B 站 UID）' };
+    return { ok: false, error: '缺少 UID / 房间号 / 直播间链接' };
   }
 
   switch (action) {
