@@ -200,13 +200,21 @@ def render_template(tpl, ctx):
     return out
 
 
-def finalize_session(store, session, settings, log, ffmpeg='', ffprobe=''):
-    """把一次直播会话的处理完：所有分P 转 mp4、导出弹幕、做封面、进投稿队列。"""
+def finalize_session(store, session, settings, log, ffmpeg='', ffprobe='',
+                     only_indexes=None, keep_session_open=False):
+    """把一次直播会话的处理完：分P 转 mp4、导出弹幕、做封面、进投稿队列。
+
+    only_indexes：只处理这些分P（长直播滚动投稿用，不给就是全部）。
+    keep_session_open：处理完不把会话标成 done（因为还在继续录）。
+    """
     ffmpeg = find_ffmpeg(ffmpeg)
     ffprobe = find_ffprobe(ffprobe, ffmpeg)
     data = session.data
     done = list(data.get('finalized') or [])
     parts = [p for p in session.parts() if p.get('status') == 'closed']
+    if only_indexes is not None:
+        want = set(int(i) for i in only_indexes)
+        parts = [p for p in parts if int(p['index']) in want]
     if not parts:
         session.update({'status': 'empty', 'finalizedAt': time.time()})
         return {'ok': True, 'items': [], 'note': '没有录到内容'}
@@ -335,9 +343,14 @@ def finalize_session(store, session, settings, log, ffmpeg='', ffprobe=''):
         log('已加入待发布队列：%d 条', len(added))
     else:
         added = []
-    session.update({'status': 'done', 'finalizedAt': time.time(),
-                    'finalized': sorted(set(done)), 'danmaku': dan_count,
-                    'cover': items[0]['cover'] if items else ''})
+    if keep_session_open:
+        # 滚动投稿：会话还在录，只把进度记下来，状态和磁盘清理留给最终收尾
+        session.update({'finalized': sorted(set(done)), 'danmaku': dan_count,
+                        'cover': items[0]['cover'] if items else (data.get('cover') or '')})
+    else:
+        session.update({'status': 'done', 'finalizedAt': time.time(),
+                        'finalized': sorted(set(done)), 'danmaku': dan_count,
+                        'cover': items[0]['cover'] if items else ''})
     if settings.get('keepRawFlv') is False:
         raw = os.path.join(session.dir, 'raw')
         try:

@@ -58,6 +58,7 @@ DEFAULT_SETTINGS = {
     'autoPublish': False,          # True = 录完直接投（默认走人工确认）
     'deleteLocalAfterPublish': True,
     'deleteSessionAfterPublish': True,   # 连会话目录（封面/弹幕/meta）一起删
+    'rollingPublish': True,        # 长直播满一个分P 就立刻投稿+删本地，不等下播
     'deleteWaitReview': True,            # 等审核通过再删；被驳回就不删
     'reviewWaitSeconds': 900,            # 等审核最多多久（超时先不删）
     'publishConcurrency': 1,

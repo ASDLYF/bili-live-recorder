@@ -70,6 +70,10 @@ class Daemon:
         except Exception:
             self.log.exc('恢复残留会话失败（继续运行）')
         settings = self.store.reload_settings()
+        # 长直播滚动投稿：满 partSeconds 切出来的分P 不等下播，当场投出去再删本地
+        rolling = threading.Thread(target=self._rolling_worker, name='rolling', daemon=True)
+        rolling.start()
+        threading.Thread(target=self._catchup_publish, name='catchup', daemon=True).start()
         last_poll = 0.0
         try:
             while not self._stop.is_set():
@@ -382,11 +386,114 @@ class Daemon:
         if not self.recorders:
             self._keep_awake(False)
 
+    # ------------------------------------------------------------ 补投
+
+    def _catchup_publish(self):
+        """启动后把上一次没收尾的 pending 补投一遍。
+
+        重启守护进程会把每路录制切成两段，旧段进了队列却没人投；
+        开了自动投稿就该补上，不然它们会一直躺在队列里等人工点。
+        """
+        time.sleep(20)   # 先让轮询和录制稳定下来，别跟开播抢带宽
+        try:
+            settings = self.store.reload_settings()
+            if not settings.get('autoPublish'):
+                return
+            pend = [i for i in (self.store.queue().get('items') or [])
+                    if i.get('status') == 'pending']
+            if not pend:
+                return
+            self.log('补投上次遗留的 %d 条待发布', len(pend))
+            out = publish.publish_items(self.store, settings, self.cookie,
+                                        [i['id'] for i in pend],
+                                        Log(os.path.join(self.work_root, 'publish.log')))
+            self.event('published', '补投队列：成功 %d / 失败 %d' % (
+                len(out.get('done') or []), len(out.get('failed') or [])))
+        except Exception:
+            self.log.exc('补投失败')
+
+    # ------------------------------------------------------------ 滚动投稿
+
+    def _rolling_worker(self):
+        """每 60 秒扫一遍：录制中会话里已闭合的分P，够长就单独立刻投出去。
+
+        主播连播 6 小时也不会等到下播才上传 —— 每满 partSeconds 切一段，
+        这段落盘、转 mp4、投稿、校验、删本地，然后录制继续往下走。
+        """
+        while not self._stop.is_set():
+            try:
+                self._rolling_tick()
+            except Exception:
+                self.log.exc('滚动投稿异常（继续运行）')
+            self._stop.wait(60)
+
+    def _rolling_tick(self):
+        settings = self.store.reload_settings()
+        if not settings.get('rollingPublish', True):
+            return
+        if not settings.get('autoPublish'):
+            return  # 关了自动投稿就只攒着，等人工确认
+        min_bytes = 20 * 1024 * 1024
+        for mid, ctx in list(self.recorders.items()):
+            sess = ctx.get('session')
+            if not sess or sess.data.get('status') not in ('recording', 'finalizing'):
+                continue
+            pend = [p for p in sess.parts()
+                    if p.get('status') == 'closed'
+                    and not p.get('published')
+                    and (p.get('bytes') or 0) >= min_bytes]
+            if not pend:
+                continue
+            idx = sorted(int(p['index']) for p in pend)
+            names = sess.data.get('uname')
+            self.log('滚动投稿开始：%s 分P %s', names, idx)
+            log = Log(sess.log_path())
+            # 这一轮先别删原始 flv：投稿失败还得靠它重来，成功后再清
+            s2 = dict(settings)
+            s2['keepRawFlv'] = True
+            res = fin.finalize_session(self.store, sess, settings=s2, log=log,
+                                       only_indexes=idx, keep_session_open=True)
+            items = res.get('items') or []
+            if not items:
+                for i in idx:
+                    sess.update_part(i, {'published': True, 'publishedAt': time.time(),
+                                         'skipReason': 'empty'})
+                continue
+            out = publish.publish_items(self.store, settings, self.cookie,
+                                        [i['id'] for i in items], log)
+            ok_ids = set(out.get('done') or [])
+            if ok_ids:
+                # 投稿链路走通了才删原始 flv（成品 mp4 由 publish 的「审核通过再删」处理）
+                for p in pend:
+                    f = p.get('file') or ''
+                    if f and os.path.exists(f):
+                        try:
+                            os.remove(f)
+                            log('滚动投稿已删原始 FLV：%s', os.path.basename(f))
+                        except Exception as e:
+                            log('删原始 FLV 失败：%s', e)
+                for i in idx:
+                    sess.update_part(i, {'published': True, 'publishedAt': time.time()})
+                self.event('published', '%s 的分P %s 已滚动上传（%d 条）' % (
+                    names, idx, len(ok_ids)), {'mid': mid, 'sessionId': sess.id,
+                                               'items': sorted(ok_ids)})
+                self.log('滚动投稿完成：%s 分P %s', names, sorted(ok_ids))
+            else:
+                self.log('滚动投稿失败：%s 分P %s，等下轮重试', names, idx)
+
     def _finalize_worker(self, mid, sess):
         settings = self.store.reload_settings()
         log = Log(sess.log_path())
         try:
-            res = fin.finalize_session(self.store, sess, settings, log)
+            left = [int(p['index']) for p in sess.parts()
+                    if p.get('status') == 'closed' and not p.get('published')]
+            if not left:
+                sess.update({'status': 'done', 'finalizedAt': time.time(),
+                             'recEnd': now()})
+                self.event('finalized', '%s 的分P 都已滚动投稿完毕' % sess.data.get('uname'),
+                           {'mid': mid, 'sessionId': sess.id})
+                return
+            res = fin.finalize_session(self.store, sess, settings, log, only_indexes=left)
             items = res.get('items') or []
             if items:
                 total = sum(i.get('bytes') or 0 for i in items)

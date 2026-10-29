@@ -722,6 +722,7 @@ window.__ModuleLoader__.load({
         keepRawFlv: Boolean(src.keepRawFlv),
         minFreeGb: Number.isFinite(Number(src.minFreeGb)) ? Number(src.minFreeGb) : 8,
         keepAwake: src.keepAwake === undefined ? true : Boolean(src.keepAwake),
+        rollingPublish: src.rollingPublish === undefined ? true : Boolean(src.rollingPublish),
         titleTemplate: src.titleTemplate || '',
         descTemplate: src.descTemplate || '',
         tid: Number(src.tid) || 21,
@@ -751,6 +752,7 @@ window.__ModuleLoader__.load({
         keepRawFlv: Boolean(form.keepRawFlv),
         minFreeGb: Number(form.minFreeGb) || 0,
         keepAwake: Boolean(form.keepAwake),
+        rollingPublish: Boolean(form.rollingPublish),
         titleTemplate: form.titleTemplate,
         descTemplate: form.descTemplate,
         tid: Number(form.tid) || 21,
@@ -2025,6 +2027,9 @@ window.__ModuleLoader__.load({
               }),
               checkbox('录制时阻止 Mac 休眠', form.keepAwake, function (v) {
                 patchForm('keepAwake', v);
+              }),
+              checkbox('长直播分段即投（满一个分P 立刻上传并删本地）', form.rollingPublish, function (v) {
+                patchForm('rollingPublish', v);
               }),
             ),
           ));
