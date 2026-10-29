@@ -713,6 +713,7 @@ window.__ModuleLoader__.load({
         makeCover: Boolean(src.makeCover),
         keepRawFlv: Boolean(src.keepRawFlv),
         minFreeGb: Number.isFinite(Number(src.minFreeGb)) ? Number(src.minFreeGb) : 8,
+        keepAwake: src.keepAwake === undefined ? true : Boolean(src.keepAwake),
         titleTemplate: src.titleTemplate || '',
         descTemplate: src.descTemplate || '',
         tid: Number(src.tid) || 21,
@@ -740,6 +741,7 @@ window.__ModuleLoader__.load({
         makeCover: Boolean(form.makeCover),
         keepRawFlv: Boolean(form.keepRawFlv),
         minFreeGb: Number(form.minFreeGb) || 0,
+        keepAwake: Boolean(form.keepAwake),
         titleTemplate: form.titleTemplate,
         descTemplate: form.descTemplate,
         tid: Number(form.tid) || 21,
@@ -1983,6 +1985,9 @@ window.__ModuleLoader__.load({
               }),
               checkbox('保留原始 FLV', form.keepRawFlv, function (v) {
                 patchForm('keepRawFlv', v);
+              }),
+              checkbox('录制时阻止 Mac 休眠', form.keepAwake, function (v) {
+                patchForm('keepAwake', v);
               }),
             ),
           ));

@@ -36,6 +36,7 @@ DEFAULT_SETTINGS = {
     'makeCover': True,             # 抽帧做封面
     'keepRawFlv': False,           # 转 mp4 后是否保留 FLV
     'minFreeGb': 8,                # 磁盘剩余低于此值停止录制
+    'keepAwake': True,             # 录制期间用 caffeinate 阻止 macOS 休眠
     # 发布默认值（参考 B 站投稿选项）
     'titleTemplate': '【录播】{date} {uname} {title}',
     'descTemplate': ('{uname} 的直播录播（{date}）。\n'

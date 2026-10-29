@@ -8,6 +8,7 @@ import json
 import os
 import shutil
 import signal
+import subprocess
 import threading
 import time
 
@@ -229,6 +230,17 @@ class Daemon:
                     if hits >= 2:
                         self._stop_recording(mid, reason='直播已结束')
 
+        # 被移除 / 被暂停的 UP 主：录制线程不会自己停，这里主动收尾。
+        # 否则 remove 之后进程还在往 flv 里写，直到手动 stop 或磁盘写满。
+        watched = {str(u.get('mid') or '') for u in ups}
+        for mid in list(self.recorders.keys()):
+            if str(mid) in watched:
+                continue
+            ctx = self.recorders.get(mid)
+            if ctx and not ctx.get('stopping'):
+                self.log('UP %s 已不在监控列表，停止录制', mid)
+                self._stop_recording(mid, reason='已从监控列表移除')
+
     # ------------------------------------------------------------ 录制生命周期
 
     def _start_recording(self, up, settings, manual=False):
@@ -275,6 +287,8 @@ class Daemon:
         self.recorders[mid] = {'session': sess, 'capture': recorder, 'thread': thread,
                                'danmaku': dan, 'stopping': False, 'startedAt': now()}
         thread.start()
+        if s.get('keepAwake', True) and settings.get('keepAwake', True):
+            self._keep_awake(True)
         self.event('live-start', '%s 开播，开始录制：%s' % (
             sess.data.get('uname'), sess.data.get('title') or ''), {'mid': mid, 'sessionId': sess.id})
         return sess
@@ -298,6 +312,36 @@ class Daemon:
         self.event('live-stop', '停止录制（%s）：%s' % (
             reason, ctx['session'].data.get('uname')), {'mid': mid,
                                                          'sessionId': ctx['session'].id})
+
+    # ------------------------------------------------------------ 防休眠（macOS）
+
+    def _keep_awake(self, on):
+        """录制期间用 caffeinate 顶住休眠 —— 这台 mac 一睡，直播流就断了。"""
+        if not hasattr(self, '_caff'):
+            self._caff = None
+        p = self._caff
+        if on:
+            if p is not None and p.poll() is None:
+                return
+            if not shutil.which('caffeinate'):
+                return
+            try:
+                self._caff = subprocess.Popen(
+                    ['caffeinate', '-i', '-m', '-s'],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    stdin=subprocess.DEVNULL)
+                self.log('录制中，已开启防休眠（caffeinate pid %s）', self._caff.pid)
+            except Exception:
+                self._caff = None
+                self.log.exc('开启防休眠失败（不影响录制）')
+        else:
+            if p is not None and p.poll() is None:
+                try:
+                    p.terminate()
+                    self.log('已关闭防休眠')
+                except Exception:
+                    pass
+            self._caff = None
 
     def _reap(self):
         """收割已结束的录制线程 → 收尾（单独线程，转码不阻塞轮询）。"""
@@ -333,6 +377,8 @@ class Daemon:
                     self.finalizers.append(t)
             if ctx.get('reaped'):
                 del self.recorders[mid]
+        if not self.recorders:
+            self._keep_awake(False)
 
     def _finalize_worker(self, mid, sess):
         settings = self.store.reload_settings()
@@ -475,6 +521,7 @@ class Daemon:
                                      Log(sess.log_path()))
             except Exception:
                 self.log.exc('退出时收尾失败')
+        self._keep_awake(False)
         self.store.set_daemon_state({'pid': 0, 'stoppedAt': now(), 'recording': {}})
         self._release_lock()
         self.event('daemon-stop', '录播守护进程已退出')

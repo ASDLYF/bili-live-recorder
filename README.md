@@ -43,6 +43,22 @@
 9. **Windows 上不能用 `os.kill(pid, 0)` 探活**（会走 `TerminateProcess`，等于查询即杀进程）
 
 
+### macOS 实测补充（本机验证通过）
+
+| 项 | 结论 |
+|---|---|
+| Python | `/usr/local/bin/python3` 3.13.0（python.org 安装器），无需 pip |
+
+**这台机器上修掉的 3 个 mac 专属问题：**
+
+1. **HTTPS 全线 `CERTIFICATE_VERIFY_FAILED`** —— python.org 版 Python 不自带 CA 包（要手动跑 `Install Certificates.command`）。
+   `bili_rec/httpc.py` 现在按「`SSL_CERT_FILE` → 默认 cafile → certifi → 系统 CA（`/etc/ssl/cert.pem`、Homebrew openssl@3、Linux 路径）」逐级兜底，换台 mac 也不用再手动装证书。
+   弹幕 WSS 复用同一份 TLS 上下文（`bili_rec/danmaku.py` 用 `httpc._CTX`），不再单独建无根证书的 context。
+2. **休眠会断流** —— 新增 `keepAwake` 设置（默认开）：开录时拉 `caffeinate -i -m -s` 顶住系统休眠，录制结束 / 守护进程退出时自动关闭。面板「录制」区有开关。
+3. **ffmpeg 版本** —— `/opt/homebrew/bin/ffmpeg` 9.0.1，满足 HEVC-in-FLV（≥7.1）要求；`ffmpegPath` / `ffprobePath` 已写进 profile 配置。
+
+> 注意：合盖（clamshell）仍会断流，`caffeinate` 只能挡住空闲睡眠。长时间录播建议插电、别合盖。
+
 ## 平台支持
 
 | 平台 | 状态 | 说明 |

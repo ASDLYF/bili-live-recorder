@@ -11,7 +11,54 @@ import urllib.request
 UA = ('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
       '(KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36')
 
-_CTX = ssl.create_default_context()
+# macOS 上 python.org 装的 Python 不会自动装 CA 包（要手动跑 Install
+# Certificates.command），于是 ssl.create_default_context() 里一个根证书都没有，
+# 所有 HTTPS 都报 CERTIFICATE_VERIFY_FAILED。这里按「显式环境变量 → certifi →
+# 系统 CA 文件」的顺序兜底，保证换台 mac 也能直接跑。
+_CA_FILES = (
+    '/etc/ssl/cert.pem',                        # macOS 系统 CA（LibreSSL 格式，CPython 认）
+    '/opt/homebrew/etc/openssl@3/cert.pem',     # Homebrew (Apple Silicon)
+    '/usr/local/etc/openssl@3/cert.pem',        # Homebrew (Intel)
+    '/opt/homebrew/etc/ca-certificates/cert.pem',
+    '/etc/ssl/certs/ca-certificates.crt',       # Debian/Ubuntu
+    '/etc/pki/tls/certs/ca-bundle.crt',         # Fedora/RHEL
+)
+
+
+def _build_context():
+    paths = ssl.get_default_verify_paths()
+    for cand in (paths.cafile, os.environ.get('SSL_CERT_FILE')):
+        if cand and os.path.exists(cand):
+            try:
+                return ssl.create_default_context(cafile=cand)
+            except Exception:
+                pass
+    try:
+        import certifi  # 有就用（python.org 安装器通常带）
+        caf = certifi.where()
+        if caf and os.path.exists(caf):
+            return ssl.create_default_context(cafile=caf)
+    except Exception:
+        pass
+    ctx = ssl.create_default_context()
+    try:
+        if ctx.cert_store_stats().get('x509_ca'):
+            return ctx
+    except Exception:
+        pass
+    for cand in _CA_FILES:
+        if os.path.exists(cand):
+            try:
+                return ssl.create_default_context(cafile=cand)
+            except Exception:
+                continue
+    if os.environ.get('BILI_REC_INSECURE') == '1':
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+    return ctx
+
+
+_CTX = _build_context()
 
 
 def _opener():

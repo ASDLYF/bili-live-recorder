@@ -16,7 +16,7 @@ import time
 import zlib
 
 from . import live
-from .httpc import cookie_field
+from .httpc import _CTX as TLS_CTX, cookie_field
 from .util import ensure_dir
 
 OP_HEARTBEAT = 2
@@ -47,8 +47,7 @@ class WsClient:
 
     def connect(self):
         raw = socket.create_connection((self.host, self.port), timeout=self.timeout)
-        ctx = ssl.create_default_context()
-        self.sock = ctx.wrap_socket(raw, server_hostname=self.host)
+        self.sock = TLS_CTX.wrap_socket(raw, server_hostname=self.host)
         self.sock.settimeout(self.timeout)
         key = base64.b64encode(os.urandom(16)).decode()
         lines = [

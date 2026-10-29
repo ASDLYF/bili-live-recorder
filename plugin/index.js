@@ -148,13 +148,17 @@ function looksLikeBackend(dir) {
 
 function discoverBackend(cfg, scriptDir, workRoot) {
   const here = dirname(fileURLToPath(import.meta.url));
+  const home = process.env.HOME || process.env.USERPROFILE || '';
   const candidates = [
     scriptDir,
     join(here, 'backend'),
+    // 源码仓库布局：<repo>/plugin 与 <repo>/backend 同级
+    join(here, '..', 'backend'),
     join(here, '..', 'bili_live_backend'),
     join(workRoot || '', '..', 'bili_live_backend'),
-    'D:\\1\\摄影\\bili_live_backend',
-    join(process.env.USERPROFILE || process.env.HOME || '', 'bili_live_backend'),
+    home ? join(home, 'DSH_workspace', 'bili-live-recorder', 'backend') : '',
+    home ? join(home, 'bili_live_backend') : '',
+    home ? join(home, '.dsh', 'bili-live-backend') : '',
   ];
   const seen = new Set();
   for (const c of candidates) {
@@ -768,7 +772,7 @@ function buildConfigSchema(z) {
       description: '工作目录：settings/ups/queue/sessions 都在这里。留空 = <后端目录>/_bili_live_work。',
     },
     pythonPath: { type: 'string', default: '', description: 'Python 解释器路径。留空自动查找。' },
-    ffmpegPath: { type: 'string', default: '', description: 'ffmpeg 路径。留空自动查找（会试 D:\\Shotcut）。' },
+    ffmpegPath: { type: 'string', default: '', description: 'ffmpeg 路径。留空自动查找（macOS：/opt/homebrew/bin，Linux：/usr/bin，PATH 优先）。需 7.1+ 才吃得下 HEVC-in-FLV。' },
     ffprobePath: { type: 'string', default: '', description: 'ffprobe 路径。留空自动查找。' },
     cookieFile: {
       type: 'string',

@@ -18,6 +18,9 @@ from .util import ensure_dir, fmt_size
 
 FLV_HEADER = b'FLV\x01\x05\x00\x00\x00\x09\x00\x00\x00\x00'
 TAG_AUDIO, TAG_VIDEO, TAG_SCRIPT = 8, 9, 18
+# 时间戳跳变阈值（毫秒）：直播正常帧间隔 <200ms，断流重连后绝对时间戳一次跳几十秒到几分钟。
+# 超过这个值就判定为断流，把时间轴重锚到上一帧之后（见 FlvSink.write_tag）。
+TS_JUMP_MS = 8000
 
 
 class NotLive(RuntimeError):
@@ -42,6 +45,9 @@ class FlvSink:
             self.offset = resume_ts + 1
             self.last_ts = resume_ts
         self.first_ts = 0 if resume_ts is None else 0
+        # 断流重锚统计：录制结束时可以把「救回来的空档」写进日志
+        self.jump_count = 0
+        self.jump_saved_ms = 0
 
     def close(self):
         try:
@@ -63,7 +69,8 @@ class FlvSink:
         return max(0, self.last_ts)
 
     def write_tag(self, tag_type, data_size, raw_ts, ext_ts, stream_id, payload, set_base=True):
-        ts = (int(ext_ts) << 24) | int(raw_ts)
+        raw = (int(ext_ts) << 24) | int(raw_ts)
+        ts = raw
         if self.base_ts is None and set_base and tag_type in (TAG_AUDIO, TAG_VIDEO):
             # 注意：直播流第一条往往是 onMetaData 脚本 tag（时间戳 0），
             # 真正的音视频 tag 时间戳是「开播至今」。基准必须取首条音视频 tag，
@@ -73,6 +80,17 @@ class FlvSink:
             ts = self.offset                     # 脚本 tag：直接落在段落起点之后
         else:
             ts = ts - self.base_ts + self.offset
+            # 断流重连：B 站下发的绝对时间戳会突然往前跳一大截（实测 185s/333s/507s），
+            # 直接平移会让 mp4 里出现「一帧持续好几分钟」的超长 duration，
+            # B 站转码直接报「视频内部存在时间戳跳变」并失败（-16）。
+            # 把跳变点重锚到上一帧之后，整条时间轴保持连续，空档自然消失。
+            if self.last_ts >= 0 and ts - self.last_ts > TS_JUMP_MS:
+                _jump = ts - self.last_ts
+                self.base_ts = raw
+                self.offset = self.last_ts + 1
+                ts = self.offset
+                self.jump_count = getattr(self, 'jump_count', 0) + 1
+                self.jump_saved_ms = getattr(self, 'jump_saved_ms', 0) + _jump
         if ts < 0:
             ts = 0
         if ts <= self.last_ts:

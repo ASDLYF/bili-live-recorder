@@ -10,16 +10,16 @@ import subprocess
 import time
 
 from . import danmaku as dm
+from . import tsfix
 from .util import ensure_dir, fmt_size, read_json, write_json
 
 _FFMPEG_ENV = 'BILI_FFMPEG'
 _FFPROBE_ENV = 'BILI_FFPROBE'
 
 _HINTS = [
-    # 新版 ffmpeg（支持 HEVC-in-FLV，4K 录制必需）；旧的 7.0.x 放最后兜底
-    r'<新版 ffmpeg 目录>\ffmpeg.exe',
-    r'D:\Shotcut\ffmpeg.exe',
+    # 新版 ffmpeg（支持 HEVC-in-FLV，4K 录制必需；7.1+）
     '/opt/homebrew/bin/ffmpeg',        # macOS Apple Silicon (Homebrew)
+    '/opt/local/bin/ffmpeg',           # macOS MacPorts
     '/usr/local/bin/ffmpeg',           # macOS Intel (Homebrew) / 手动安装
     '/usr/bin/ffmpeg',                 # Linux 发行版
     r'C:\ffmpeg\bin\ffmpeg.exe',
@@ -31,10 +31,23 @@ def _which(name):
     return shutil.which(name)
 
 
+def _resolve_exe(cand):
+    """显式路径 / 环境变量传进来的可能是绝对路径，也可能只是个命令名。"""
+    if not cand:
+        return ''
+    cand = str(cand).strip()
+    if not cand:
+        return ''
+    if os.path.exists(cand):
+        return cand
+    return shutil.which(cand) or ''
+
+
 def find_ffmpeg(explicit=''):
     for cand in (explicit, os.environ.get(_FFMPEG_ENV)):
-        if cand and os.path.exists(cand):
-            return cand
+        hit = _resolve_exe(cand)
+        if hit:
+            return hit
     hit = _which('ffmpeg')
     if hit:
         return hit
@@ -44,21 +57,32 @@ def find_ffmpeg(explicit=''):
     return ''
 
 
+def _sibling_probe(exe):
+    """从 ffmpeg 路径推导同目录的 ffprobe（跨平台：ffmpeg.exe → ffprobe.exe）。"""
+    if not exe:
+        return ''
+    d = os.path.dirname(os.path.abspath(exe))
+    for name in ('ffprobe.exe', 'ffprobe'):
+        cand = os.path.join(d, name)
+        if os.path.exists(cand):
+            return cand
+    return ''
+
+
 def find_ffprobe(explicit='', ffmpeg=''):
     for cand in (explicit, os.environ.get(_FFPROBE_ENV)):
-        if cand and os.path.exists(cand):
-            return cand
+        hit = _resolve_exe(cand)
+        if hit:
+            return hit
     hit = _which('ffprobe')
     if hit:
         return hit
-    if ffmpeg:
-        guess = os.path.join(os.path.dirname(ffmpeg),
-                             'ffprobe.exe' if os.name == 'nt' else 'ffprobe')
-        if os.path.exists(guess):
-            return guess
+    guess = _sibling_probe(ffmpeg)
+    if guess:
+        return guess
     for cand in _HINTS:
-        p = cand.replace('ffmpeg.exe', 'ffprobe.exe')
-        if os.path.exists(p):
+        p = _sibling_probe(cand)
+        if p:
             return p
     return ''
 
@@ -186,6 +210,14 @@ def finalize_session(store, session, settings, log, ffmpeg='', ffprobe=''):
             log('转封装 分P%d：%s', part['index'], fmt_size(os.path.getsize(src)))
             try:
                 remux(ffmpeg, src, dst, log=log)
+                # 兜底：断流留下的时间戳跳变会让 B 站转码失败（state=-16），
+                # 录到一半就断了的历史文件尤其常见。
+                try:
+                    fixed = tsfix.flatten_if_needed(ffmpeg, ffprobe, dst, log=log)
+                    if fixed:
+                        log('分P%d 修掉 %d 处时间戳跳变', part['index'], fixed)
+                except Exception as e:
+                    log('分P%d 时间戳修复跳过：%s', part['index'], e)
                 info = probe(ffprobe, dst)
             except Exception as e:
                 log('分P%d 转封装失败：%s', part['index'], e)
