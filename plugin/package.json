@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "B站录播姬：自动录制某位 UP 主的直播，录完进待发布队列，确认后按 B站投稿选项发布到自己的账号",
+  "description": "直播小助手：自动录制 B站 / 虎牙 主播的直播，录完进待发布队列，确认后按 B站投稿选项发布到自己的账号",
   "icon": "./icon.svg",
   "exports": {
     ".": "./index.js",

@@ -52,11 +52,21 @@ def read_json(path, default=None):
         return default
 
 
-def write_json(path, value):
-    """原子写：先写临时文件再替换，避免读到半个文件。"""
+def write_json(path, value, backup=True):
+    """原子写：先写临时文件再替换，避免读到半个文件。
+
+    backup=True 时先把旧文件留一份 .bak —— 主播列表这类「一次写坏就再也找不回来」
+    的小文件，靠它兜底（曾经因为一次写空把 4 个主播全丢了）。
+    """
     d = os.path.dirname(os.path.abspath(path))
     if d:
         ensure_dir(d)
+    if backup and os.path.exists(path):
+        try:
+            import shutil
+            shutil.copy2(path, path + '.bak')
+        except Exception:
+            pass
     fd, tmp = tempfile.mkstemp(dir=d or '.', prefix='.tmp-', suffix='.json')
     try:
         with os.fdopen(fd, 'w', encoding='utf-8') as f:
