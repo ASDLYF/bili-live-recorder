@@ -428,7 +428,7 @@ export function apply(ctx, config = {}) {
   define({
     name: 'bili_live_status',
     description:
-      '直播小助手总览：守护进程是否在跑、监控的 UP 主及其开播/录制状态、已录会话、待发布队列统计、磁盘剩余。',
+      '直播小助手总览：守护进程是否在跑、监控的 主播及其开播/录制状态、已录会话、待发布队列统计、磁盘剩余。',
     parameters: { type: 'object', properties: {}, additionalProperties: false },
     output: genericOutput((_a, v) => {
       if (!v || v.ok === false) return block(`读取状态失败：${(v && v.error) || '未知错误'}`);
@@ -437,7 +437,7 @@ export function apply(ctx, config = {}) {
         `直播小助手：守护进程${d.alive ? `运行中（PID ${d.pid}，已运行 ${fmtDur(d.uptimeSec)}）` : '未运行（不会自动录制）'}`,
         `  工作目录：${v.workRoot || '(未配置)'}　磁盘剩余：${v.disk && v.disk.freeGb != null ? `${v.disk.freeGb}GB` : '未知'}`,
         `  凭据：${v.cookie && v.cookie.present ? '已保存' : '未设置（录制与投稿都要 B 站 cookie）'}`,
-        `  UP 主 ${(v.ups || []).length} 个：`,
+        `  主播 ${(v.ups || []).length} 个：`,
         ...(v.ups || []).map((u) => {
           const rec = u.recording;
           const state = rec
@@ -479,7 +479,7 @@ export function apply(ctx, config = {}) {
   define({
     name: 'bili_live_ups',
     description:
-      '管理要监控的 UP 主：list 列出 / add 添加（只填 UID，插件自动解析直播间）/ remove 移除 / toggle 开关监控。',
+      '管理要监控的主播：list 列出 / add 添加（B站填 UID 或直播间号；虎牙填 huya:房间号 或贴 huya.com 链接）/ remove 移除 / toggle 开关监控。',
     parameters: {
       type: 'object',
       properties: {
@@ -493,7 +493,7 @@ export function apply(ctx, config = {}) {
     output: genericOutput((_a, v) => {
       if (!v || v.ok === false) return block(`操作失败：${(v && v.error) || '未知错误'}`);
       if (v.ups) {
-        if (!v.ups.length) return block('还没有监控任何 UP 主，用 bili_live_ups { action:"add", mid } 添加');
+        if (!v.ups.length) return block('还没有监控任何 主播，用 bili_live_ups { action:"add", mid } 添加');
         return block(
           `监控列表（${v.ups.length} 个）：\n` +
             v.ups
@@ -502,7 +502,7 @@ export function apply(ctx, config = {}) {
         );
       }
       if (v.up) return block(`已保存：${v.up.uname || ''}（${v.up.mid}）房间 ${v.up.roomId || '?'}`);
-      if (v.removed) return block(`已移除 UP 主 ${v.removed}`);
+      if (v.removed) return block(`已移除 主播 ${v.removed}`);
       return block(text(v));
     }),
     async execute(args) {
@@ -517,7 +517,7 @@ export function apply(ctx, config = {}) {
   define({
     name: 'bili_live_record',
     description:
-      '手动开始/停止某个 UP 主的录制（守护进程必须在运行）。默认是自动录制：开播就录、下播就停。',
+      '手动开始/停止某个 主播的录制（守护进程必须在运行）。默认是自动录制：开播就录、下播就停。',
     parameters: {
       type: 'object',
       properties: {
@@ -554,7 +554,7 @@ export function apply(ctx, config = {}) {
       if (v.alive !== undefined) {
         if (!v.alive) return block('守护进程未运行');
         const rec = Object.keys(v.recording || {});
-        return block(`守护进程运行中（PID ${v.pid}）${rec.length ? `，正在录制 ${rec.length} 个 UP 主` : '，当前没有在录'}`);
+        return block(`守护进程运行中（PID ${v.pid}）${rec.length ? `，正在录制 ${rec.length} 个 主播` : '，当前没有在录'}`);
       }
       if (v.already) return block(`守护进程已在运行（PID ${v.pid}）`);
       if (v.started) return block(`守护进程已启动（PID ${v.pid}），DSH 关掉也会继续录`);
@@ -661,7 +661,7 @@ export function apply(ctx, config = {}) {
   define({
     name: 'bili_live_settings',
     description:
-      '读写直播小助手设置（不传 patch 就是读）。可改：partSeconds 分P时长秒、maxQn 清晰度、preferCodec、pollSeconds、titleTemplate、descTemplate、tid 分区、tags、visibility（private 仅自己可见/public/scheduled）、autoPublish、deleteLocalAfterPublish 等。',
+      '读写直播小助手设置（不传 patch 就是读）。可改：partSeconds 分P时长秒、maxQn 清晰度、huyaQuality 虎牙录完降档（原画/1080p/720p/480p）、preferCodec、pollSeconds、titleTemplate、descTemplate、tid 分区、tags、visibility（private 仅自己可见/public/scheduled）、autoPublish、deleteLocalAfterPublish 等。',
     parameters: {
       type: 'object',
       properties: {

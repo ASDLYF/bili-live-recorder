@@ -27,7 +27,7 @@ window.__ModuleLoader__.load({
     const T = {
       panel: '直播小助手',
       title: '直播小助手',
-      intro: '监控 UP 主开播 · 自动分P录制 · 收尾后排队投稿到 B 站',
+      intro: '监控 B站 / 虎牙 主播开播 · 自动分P录制 · 收尾后排队投稿到 B 站',
       loading: '正在读取…',
       refresh: '刷新',
       unknown: '未知',
@@ -162,6 +162,13 @@ window.__ModuleLoader__.load({
     const CODEC_OPTIONS = [
       ['avc', 'AVC / H.264（兼容好）'],
       ['hevc', 'HEVC / H.265（仅 4K）'],
+    ];
+
+    const HUYA_QUALITY_OPTIONS = [
+      ['', '原画（不转码）'],
+      ['1080p', '1080p（约 4Mbps）'],
+      ['720p', '720p（约 2.2Mbps）'],
+      ['480p', '480p（约 1Mbps）'],
     ];
 
     const VIS_OPTIONS = [
@@ -707,6 +714,7 @@ window.__ModuleLoader__.load({
       return {
         pollSeconds: Number(src.pollSeconds) || 30,
         maxQn: Number(src.maxQn) || 10000,
+        huyaQuality: String(src.huyaQuality || ''),
         preferCodec: src.preferCodec || 'avc',
         partMinutes: Math.max(1, Math.round((Number(src.partSeconds) || 7200) / 60)),
         danmaku: Boolean(src.danmaku),
@@ -735,6 +743,7 @@ window.__ModuleLoader__.load({
       return {
         pollSeconds: Number(form.pollSeconds) || 30,
         maxQn: Number(form.maxQn) || 10000,
+        huyaQuality: String(form.huyaQuality || ''),
         preferCodec: form.preferCodec,
         partSeconds: Math.max(60, Math.round((Number(form.partMinutes) || 120) * 60)),
         danmaku: Boolean(form.danmaku),
@@ -802,6 +811,7 @@ window.__ModuleLoader__.load({
       );
 
       const [newMid, setNewMid] = React.useState('');
+      const [addPlat, setAddPlat] = React.useState('bili');
       const [showAdd, setShowAdd] = React.useState(false);
       const [addMsg, setAddMsg] = React.useState('');
 
@@ -895,8 +905,12 @@ window.__ModuleLoader__.load({
           setAddMsg('请填写 UID / 房间号 / 直播间链接');
           return;
         }
+        // 已经是 huya:xxx / bili:xxx 或贴了链接就原样交给后端自动识别；
+        // 纯数字按上面选的平台补前缀，避免虎牙房间号和 B 站 UID 撞号。
+        const explicit = /^(huya|bili|bilibili)\s*:/i.test(raw) || /huya\.com|bilibili\.com/i.test(raw);
+        const target = explicit ? raw : String(addPlat || 'bili') + ':' + raw;
         setAddMsg('正在添加…');
-        const r = await run('addUp', 'addUp', { mid: raw });
+        const r = await run('addUp', 'addUp', { mid: target });
         if (r && r.ok) {
           setNewMid('');
           setAddMsg('已添加 ' + String((r.mid || raw)));
@@ -940,7 +954,7 @@ window.__ModuleLoader__.load({
         }
         const r = await run('seasonSave:' + mid, 'saveSettings', { settings: { seasonMap: next } });
         if (r && r.ok) {
-          setNotice(seasonId ? '已设置该 UP 主的投稿合集' : '已清除该 UP 主的合集设置');
+          setNotice(seasonId ? '已设置该 主播的投稿合集' : '已清除该 主播的合集设置');
         }
       };
 
@@ -1293,7 +1307,7 @@ window.__ModuleLoader__.load({
               }
             }, { disabled: busyDisabled }),
             !cookie || !cookie.present
-              ? h('span', { style: S.warnText }, '未设置 cookie 时无法投稿，请在下方「设置 → 登录凭据」里粘贴')
+              ? h('span', { style: S.warnText }, '未设置 B 站 cookie 时无法投稿；虎牙录制不需要 cookie，直接在下方列表填房间号即可')
               : null,
             authMsg ? h('span', { style: authedStyle(authMsg) }, authMsg) : null,
           ),
@@ -1330,12 +1344,12 @@ window.__ModuleLoader__.load({
         children.push(h('div', { key: 'notice', style: S.okBanner }, notice));
       }
 
-      // ---------------- UP 主列表
+      // ---------------- 主播列表
       const upChildren = [
         h(
           'div',
           { key: 'h', style: S.cardHead },
-          h('span', { style: S.cardTitle }, 'UP 主'),
+          h('span', { style: S.cardTitle }, '主播'),
           h('span', { style: S.tiny }, ups.length + ' 位'),
           h('span', { style: S.spacer }),
           button(showAdd ? '收起' : '添加主播', function () {
@@ -1350,10 +1364,29 @@ window.__ModuleLoader__.load({
           h(
             'div',
             { key: 'add', style: Object.assign({}, S.stepper, { marginBottom: '10px' }) },
+            h('select', {
+              className: 'blinput',
+              value: addPlat,
+              disabled: busyDisabled,
+              style: { flex: '0 0 92px', width: '92px' },
+              onChange: function (e) {
+                setAddPlat(e.target.value);
+              },
+            },
+              h('option', { value: 'bili' }, 'B站'),
+              h('option', { value: 'huya' }, '虎牙'),
+            ),
             h(
               'div',
               { style: { flex: '1 1 260px', minWidth: '200px' } },
-              textInput(newMid, setNewMid, 'B站 UID / 直播间号，或虎牙房间号比如 huya:919191', busyDisabled),
+              textInput(
+                newMid,
+                setNewMid,
+                addPlat === 'huya'
+                  ? '虎牙房间号，比如 919191（也可直接贴 huya.com 链接）'
+                  : 'B站 UID 或直播间号（也可直接贴直播间链接）',
+                busyDisabled,
+              ),
             ),
             button(busy === 'addUp' ? '正在添加…' : '添加', doAdd, {
               className: 'blbtn blbtnPrimary',
@@ -1370,7 +1403,7 @@ window.__ModuleLoader__.load({
 
       if (!ups.length) {
         upChildren.push(
-          h('div', { key: 'empty', style: S.tiny }, '还没有监控的 UP 主。点「添加 UP 主」填 UID 或直播间链接。'),
+          h('div', { key: 'empty', style: S.tiny }, '还没有监控的主播。点「添加主播」，选平台后填 UID / 房间号，或直接贴直播间链接。'),
         );
       } else {
         upChildren.push(
@@ -1402,7 +1435,7 @@ window.__ModuleLoader__.load({
           h(
             'div',
             { style: { display: 'flex', gap: '6px', alignItems: 'center' } },
-            h('span', { style: S.upName, title: up.uname || mid }, up.uname || mid || '未知 UP 主'),
+            h('span', { style: S.upName, title: up.uname || mid }, up.uname || mid || '未知 主播'),
             up.live ? badge('Live', '直播中') : badge('Idle', '未开播'),
             up.enabled ? null : badge('Warn', '已暂停监控'),
             recording ? badge('Warn', stopping ? '正在停止' : '录制中') : null,
@@ -1643,7 +1676,7 @@ window.__ModuleLoader__.load({
             h(
               'div',
               { key: 'g:' + sid, style: S.groupHead },
-              h('span', { style: S.groupName }, items[0].uname || g.uname || '未知 UP 主'),
+              h('span', { style: S.groupName }, items[0].uname || g.uname || '未知 主播'),
               h('span', null, stamp.full || ''),
               h('span', null, '共 ' + g.items.length + ' P'),
               h('span', { style: S.spacer }),
@@ -1873,7 +1906,7 @@ window.__ModuleLoader__.load({
                   h(
                     'div',
                     { style: { display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' } },
-                    h('span', { style: S.upName, title: s.title || '' }, s.uname || s.mid || '未知 UP 主'),
+                    h('span', { style: S.upName, title: s.title || '' }, s.uname || s.mid || '未知 主播'),
                     badge(stBadge, SESSION_STATE[st] || (st || T.unknown)),
                     localFiles === null
                       ? null
@@ -1965,6 +1998,9 @@ window.__ModuleLoader__.load({
               field('清晰度', selectBox(form.maxQn, QN_OPTIONS, function (v) {
                 patchForm('maxQn', Number(v));
               }, busyDisabled), '原画 10000 / 4K 20000 / 蓝光 400 / 超清 250'),
+              field('虎牙录完画质', selectBox(form.huyaQuality, HUYA_QUALITY_OPTIONS, function (v) {
+                patchForm('huyaQuality', v);
+              }, busyDisabled), '虎牙只有源画质一路流，选降档会在录制结束后转码压缩（比较吃 CPU）'),
               field('编码偏好', selectBox(form.preferCodec, CODEC_OPTIONS, function (v) {
                 patchForm('preferCodec', v);
               }, busyDisabled), 'AVC 兼容性好；HEVC 体积小但仅 4K 有'),
@@ -2095,9 +2131,11 @@ window.__ModuleLoader__.load({
           ));
 
           setChildren.push(h('div', { key: 'secCred', style: S.sec },
-            h('div', { style: S.secttl }, '登录凭据'),
+            h('div', { style: S.secttl }, '登录凭据（B 站帐号）'),
             h('div', { style: Object.assign({}, S.tiny, { marginBottom: '6px' }) },
               '整行粘贴浏览器里复制的 Cookie（含 SESSDATA、bili_jct）。只写入本机后端目录；界面不回显内容，也不会通过网络返回。'),
+            h('div', { style: Object.assign({}, S.tiny, { marginBottom: '6px', color: 'var(--dsw-alias-state-success-primary)' }) },
+              '虎牙录制不需要任何 cookie：填房间号就能录，这里的凭据只用于把你的录播投稿到 B 站。'),
             h('div', { style: Object.assign({}, S.tiny, { marginBottom: '6px' }) },
               cookie && cookie.present
                 ? '当前：已保存 ' + (Number(cookie.bytes) || 0) + ' 字节' +

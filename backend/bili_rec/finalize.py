@@ -126,9 +126,45 @@ def probe(ffprobe, path):
     return out
 
 
-def remux(ffmpeg, src, dst, log=None):
-    """无损转封装：-c copy。FLV 里的 h264/aac 原样搬进 mp4。"""
+_QUALITY_PRESET = {
+    # quality: (长边像素, 峰值码率)
+    '1080p': ('1080', '4000k'),
+    '720p': ('720', '2200k'),
+    '480p': ('480', '1000k'),
+}
+
+
+def remux(ffmpeg, src, dst, log=None, quality=''):
+    """转封装成 mp4。
+
+    默认 -c copy 无损搬运。quality 给 '1080p'/'720p'/'480p' 时走重编码降档 ——
+    虎牙的 FLV 只有源画质一条路（rateArray 是播放器标签，URL 带 ratio 无效），
+    想省盘只能在录完之后压。
+    """
     tmp = dst + '.part.mp4'
+    q = _QUALITY_PRESET.get(str(quality or ''))
+    if q:
+        target, br = q
+        # 横屏压长边=宽，竖屏压长边=高，短边按 -2 自动对齐偶数
+        vf = ("scale='if(gte(iw,ih),{0},-2)':'if(gte(iw,ih),-2,{0})'".format(target))
+        if log:
+            log('降档转码到 %s（峰值 %s）', quality, br)
+        p = run([ffmpeg, '-y', '-hide_banner', '-loglevel', 'error',
+                 '-i', src, '-map', '0:v:0', '-map', '0:a:0?',
+                 '-vf', vf, '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23',
+                 '-maxrate', br, '-bufsize', str(int(br[:-1]) * 2) + 'k',
+                 '-c:a', 'aac', '-b:a', '128k',
+                 '-movflags', '+faststart', '-f', 'mp4', tmp],
+                timeout=12 * 3600, log=log)
+        if p.returncode == 0 and os.path.exists(tmp) and os.path.getsize(tmp) > 1024:
+            os.replace(tmp, dst)
+            return dst
+        if log:
+            log('降档失败，回落到无损转封装')
+        try:
+            os.path.exists(tmp) and os.unlink(tmp)
+        except Exception:
+            pass
     p = run([ffmpeg, '-y', '-hide_banner', '-loglevel', 'error',
              '-i', src, '-map', '0:v:0', '-map', '0:a:0?', '-c', 'copy',
              '-movflags', '+faststart', '-f', 'mp4', tmp], timeout=6 * 3600, log=log)
@@ -211,7 +247,10 @@ def finalize_session(store, session, settings, log, ffmpeg='', ffprobe=''):
         else:
             log('转封装 分P%d：%s', part['index'], fmt_size(os.path.getsize(src)))
             try:
-                remux(ffmpeg, src, dst, log=log)
+                _q = ''
+                if _plat == 'huya':
+                    _q = str((settings or {}).get('huyaQuality') or '')
+                remux(ffmpeg, src, dst, log=log, quality=_q)
                 # 兜底：断流留下的时间戳跳变会让 B 站转码失败（state=-16），
                 # 录到一半就断了的历史文件尤其常见。
                 try:
